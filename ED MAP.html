@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Octahedron Diamond Sphere (Merged Vertices, Subdivisions 15)</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    canvas { display: block; }
+  </style>
+</head>
+<body>
+  <!-- 1) Load Three.js, OrbitControls, BufferGeometryUtils, and dat.GUI from CDNs (global scripts) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.136.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.136.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.136.0/examples/js/utils/BufferGeometryUtils.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+  <script>
+  //////////////////////////////////////////////////////////////////////////
+  // 2) Basic Three.js Setup
+  //////////////////////////////////////////////////////////////////////////
+  let scene, camera, renderer, controls;
+  let diamondMesh = null; // Final mesh will be stored here
+
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x222222);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 0, 8);
+
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+  // Lights
+  const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+  scene.add(ambientLight);
+  const dirLight = new THREE.DirectionalLight(0xffffff, 0.4);
+  dirLight.position.set(5, 10, 7.5);
+  scene.add(dirLight);
+
+  //////////////////////////////////////////////////////////////////////////
+  // 3) Define an Octahedron (6 vertices, 8 triangular faces)
+  //////////////////////////////////////////////////////////////////////////
+  // Unit octahedron vertices (we’ll project them onto the sphere later)
+  const topV    = new THREE.Vector3(0, 0,  1);
+  const bottomV = new THREE.Vector3(0, 0, -1);
+  const northV  = new THREE.Vector3(0, 1,  0);
+  const southV  = new THREE.Vector3(0, -1, 0);
+  const eastV   = new THREE.Vector3(1, 0,  0);
+  const westV   = new THREE.Vector3(-1, 0, 0);
+
+  // Each face is defined as an array of 3 vertices (in CCW order)
+  const faces = [
+    [ topV,   northV, eastV ],
+    [ topV,   eastV,  southV ],
+    [ topV,   southV, westV ],
+    [ topV,   westV,  northV ],
+    [ bottomV, eastV,  northV ],
+    [ bottomV, southV, eastV ],
+    [ bottomV, westV,  southV ],
+    [ bottomV, northV, westV ],
+  ];
+
+  //////////////////////////////////////////////////////////////////////////
+  // 4) Subdivide each face into diamond cells
+  //////////////////////////////////////////////////////////////////////////
+  // Barycentric interpolation function:
+  function interpolateTriangle(A, B, C, i, j, n) {
+    // i, j in [0..n] with i+j <= n
+    const k = n - i - j;
+    const x = (A.x * k + B.x * i + C.x * j) / n;
+    const y = (A.y * k + B.y * i + C.y * j) / n;
+    const z = (A.z * k + B.z * i + C.z * j) / n;
+    return new THREE.Vector3(x, y, z);
+  }
+
+  // Subdivide one triangular face into diamonds
+  function subdivideFace(faceVerts, subdivisions, radius) {
+    const [A, B, C] = faceVerts;
+    const diamonds = [];
+
+    for (let i = 0; i < subdivisions; i++) {
+      for (let j = 0; j < (subdivisions - i); j++) {
+        // Get four corner points in barycentric coordinates
+        const v0 = interpolateTriangle(A, B, C, i,   j,   subdivisions);
+        const v1 = interpolateTriangle(A, B, C, i+1, j,   subdivisions);
+        const v2 = interpolateTriangle(A, B, C, i,   j+1, subdivisions);
+        const v3 = interpolateTriangle(A, B, C, i+1, j+1, subdivisions);
+
+        // Project onto sphere by normalizing and multiplying by radius
+        [v0, v1, v2, v3].forEach(v => {
+          v.normalize().multiplyScalar(radius);
+        });
+
+        diamonds.push([v0, v1, v2, v3]);
+      }
+    }
+    return diamonds;
+  }
+
+  // Convert a diamond (with 4 corners) into two triangles (6 vertices)
+  function diamondToTriangles(diamondCorners) {
+    const [v0, v1, v2, v3] = diamondCorners;
+    const pos = [];
+    // First triangle: v0, v1, v2
+    pos.push(v0.x, v0.y, v0.z,  v1.x, v1.y, v1.z,  v2.x, v2.y, v2.z);
+    // Second triangle: v2, v1, v3
+    pos.push(v2.x, v2.y, v2.z,  v1.x, v1.y, v1.z,  v3.x, v3.y, v3.z);
+    return pos;
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  // 5) Build the Diamond Sphere as a single merged mesh
+  //////////////////////////////////////////////////////////////////////////
+  function buildDiamondSphere() {
+    // Remove old mesh if it exists
+    if (diamondMesh) {
+      scene.remove(diamondMesh);
+      diamondMesh.geometry.dispose();
+      diamondMesh.material.dispose();
+      diamondMesh = null;
+    }
+
+    const { radius, subdivisions } = params;
+    const positions = [];
+    const colors = [];
+
+    // For each of the 8 octahedron faces, subdivide and build diamonds
+    faces.forEach(face => {
+      const diamonds = subdivideFace(face, subdivisions, radius);
+      diamonds.forEach(d => {
+        const triPos = diamondToTriangles(d);
+        // Use one random color per diamond
+        const col = new THREE.Color().setHSL(Math.random(), 0.5, 0.5);
+        for (let i = 0; i < triPos.length; i += 3) {
+          positions.push(triPos[i], triPos[i+1], triPos[i+2]);
+          colors.push(col.r, col.g, col.b);
+        }
+      });
+    });
+
+    // Create BufferGeometry and add attributes
+    let geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+    geometry.computeVertexNormals();
+
+    // Merge duplicate vertices to weld shared edges (avoid overlapping at seams)
+    geometry = THREE.BufferGeometryUtils.mergeVertices(geometry, 1e-5);
+    geometry.computeVertexNormals();
+
+    // Material: using per-vertex colors, double-sided and flat-shaded
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+      flatShading: true
+    });
+
+    diamondMesh = new THREE.Mesh(geometry, material);
+    scene.add(diamondMesh);
+  }
+
+  //////////////////////////////////////////////////////////////////////////
+  // 6) dat.GUI for User Parameters
+  //////////////////////////////////////////////////////////////////////////
+  const params = {
+    radius: 3,       // Sphere radius
+    subdivisions: 15 // Default subdivisions set to 15
+  };
+
+  const gui = new dat.GUI();
+  gui.add(params, 'radius', 1, 10, 0.5).name('Sphere Radius').onChange(buildDiamondSphere);
+  gui.add(params, 'subdivisions', 1, 20, 1).name('Subdivisions').onChange(buildDiamondSphere);
+
+  // Build initial mesh
+  buildDiamondSphere();
+
+  //////////////////////////////////////////////////////////////////////////
+  // 7) Animation Loop (No Auto-Rotate)
+  //////////////////////////////////////////////////////////////////////////
+  function animate() {
+    requestAnimationFrame(animate);
+    controls.update();
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // Handle window resize
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth/window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+  </script>
+</body>
+</html>
